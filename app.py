@@ -1,7 +1,8 @@
 from dotenv import load_dotenv
 import chainlit as cl
 import base64
-from agents.base_agent import Agent
+from agents.planning_agent import PlanningAgent
+from agents.implementation_agent import ImplementationAgent
 from prompts import PLANNING_PROMPT, SYSTEM_PROMPT
 
 load_dotenv()
@@ -22,8 +23,10 @@ gen_kwargs = {
 }
 
 # Create an instance of the Agent class
-planning_agent = Agent(name="Planning Agent", client=client, prompt=PLANNING_PROMPT)
-
+planning_agent = PlanningAgent(client=client)
+implementation_agent = ImplementationAgent(client=client)
+planning_agent.register_agent(implementation_agent)
+implementation_agent.register_agent(planning_agent)
 
 @observe
 @cl.on_chat_start

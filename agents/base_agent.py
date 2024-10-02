@@ -1,4 +1,5 @@
 import os
+import json
 import chainlit as cl
 
 class Agent:
@@ -28,8 +29,28 @@ class Agent:
                     "additionalProperties": False,
                 },
             }
+        },
+        {
+        "type": "function",
+        "function": {
+            "name": "callAgent",
+            "description": "Call another agent to perform a specific task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "The name of the agent to call (e.g., 'implementation').",
+                    },
+                },
+                "required": ["agent_name"],
+                "additionalProperties": False,
+                },
+            }
         }
     ]
+
+    known_agents = {}
 
     def __init__(self, name, client, prompt="", gen_kwargs=None):
         self.name = name
@@ -39,6 +60,9 @@ class Agent:
             "model": "gpt-4o",
             "temperature": 0.2
         }
+        
+    def register_agent(self, agent):
+        self.known_agents[agent.name] = agent
 
     async def execute(self, message_history):
         """
@@ -60,32 +84,50 @@ class Agent:
         await response_message.send()
 
         stream = await self.client.chat.completions.create(messages=copied_message_history, stream=True, tools=self.tools, tool_choice="auto", **self.gen_kwargs)
-
-        function_name = ""
-        arguments = ""
+                
+        full_response = ""
+        tool_calls = []
+        current_tool_call_index = None
+        current_tool_call = None
+        
         async for part in stream:
-            if part.choices[0].delta.tool_calls:
-                tool_call = part.choices[0].delta.tool_calls[0]
-                function_name_delta = tool_call.function.name or ""
-                arguments_delta = tool_call.function.arguments or ""
-                
-                function_name += function_name_delta
-                arguments += arguments_delta
-        
-            if token := part.choices[0].delta.content or "":
-                await response_message.stream_token(token)        
-        
-        if function_name:
-            print("DEBUG: function_name:")
-            print("type:", type(function_name))
-            print("value:", function_name)
-            print("DEBUG: arguments:")
-            print("type:", type(arguments))
-            print("value:", arguments)
+            delta = part.choices[0].delta
             
-            if function_name == "updateArtifact":
-                import json
-                
+            if delta.content:
+                await response_message.stream_token(delta.content)
+                full_response += delta.content
+
+            if delta.tool_calls:
+                is_tool_call = True
+                # print("Tool calls: " + str(delta.tool_calls))
+                for tool_call in delta.tool_calls:
+                    if tool_call.index is not current_tool_call_index:  # A new tool call is starting
+                        if current_tool_call:
+                            tool_calls.append(current_tool_call)
+                        current_tool_call = {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments or ""
+                        }
+                        current_tool_call_index = tool_call.index
+                    else:
+                        if tool_call.function and tool_call.function.arguments:
+                            current_tool_call["arguments"] += tool_call.function.arguments
+                        elif tool_call.function and tool_call.function.name:
+                            current_tool_call["name"] += tool_call.function.name
+
+        if current_tool_call:
+            tool_calls.append(current_tool_call)
+
+        print("Tool calls: " + str(tool_calls))      
+
+        for tool_call in tool_calls:
+            function_name = tool_call["name"]
+            arguments = tool_call["arguments"]
+
+            print(f"DEBUG: function_name: {function_name}")
+            print(f"DEBUG: arguments: {arguments}")        
+            
+            if function_name == "updateArtifact":              
                 arguments_dict = json.loads(arguments)
                 filename = arguments_dict.get("filename")
                 contents = arguments_dict.get("contents")
@@ -105,13 +147,22 @@ class Agent:
                     async for part in stream:
                         if token := part.choices[0].delta.content or "":
                             await response_message.stream_token(token)  
+            elif function_name == "callAgent":
+                arguments_dict = json.loads(arguments)
+                agent_name = arguments_dict.get("agent_name")
+                if agent_name:
+                    if agent_name in self.known_agents:
+                        print(f"DEBUG: calling {agent_name} agent")
+                        return await self.known_agents[agent_name].execute(message_history)
+                    else:
+                        print(f"DEBUG: {agent_name} agent not found")
 
         else:
             print("No tool call")
 
         await response_message.update()
-
         return response_message.content
+
 
     def _build_system_prompt(self):
         """
