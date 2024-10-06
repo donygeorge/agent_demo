@@ -22,14 +22,15 @@ class SupervisorAgent(Agent):
             # print(f"DEBUG: arguments: {arguments}")        
             
             if function_name == "callAgent":
-                arguments_dict = json.loads(arguments)
-                agent_name = arguments_dict.get("agent_name")
-                agent_message = arguments_dict.get("message")
-                if agent_name and agent_name in self.known_agents:
-                    contain_call_agent = True
+                try:
+                    arguments_dict = json.loads(arguments)
+                    agent_name = arguments_dict.get("agent_name")
+                    agent_message = arguments_dict.get("message")
+                    if agent_name and agent_name in self.known_agents:
+                        contain_call_agent = True
 
-                    call_message = cl.Message(content=agent_message)
-                    await call_message.send()
+                        call_message = cl.Message(content=agent_message)
+                        await call_message.send()
 
                     # Inform the user about the agent call
                     print(f"DEBUG: calling {agent_name} agent with message: {agent_message}")
@@ -49,11 +50,17 @@ class SupervisorAgent(Agent):
                     complete_message = cl.Message(content=f"The {agent_name.capitalize()} Agent has completed its task.")
                     await complete_message.send()
 
+                except Exception as e:
+                    print(f"DEBUG: Error in handle_call_agent: {e}")
+                    continue
+
         return contain_call_agent, appended_messages
     
     async def execute(self, message_history):
         print(f'executing supervisor execute')
         appended_messages = []
+        retries = 0
+
         while True:
             full_response, tool_calls = await self.extract_response(message_history)
         
@@ -71,14 +78,16 @@ class SupervisorAgent(Agent):
             print(f"\nDEBUG (supervisor): Updated message_history:\n {pretty_print_messages(message_history)}\n\n")
     
             if not contain_call_agent:
-                final_message = cl.Message(content="The web page creation process is complete.")
-                await final_message.send()
-                return appended_messages
-
-    
-            # # Check if the process is complete
-            # if "<<PROCESS COMPLETE>>" in response:
-            #     final_message = cl.Message(content="The web page creation process is complete.")
-            #     await final_message.send()
-            #     return appended_messages
-                                            
+                    # Check if the process is complete
+                if "PROCESS COMPLETE" in full_response:
+                    final_message = cl.Message(content="The web page creation process is complete.")
+                    await final_message.send()
+                    return appended_messages
+                
+                retries += 1
+                if retries > 5:
+                    final_message = cl.Message(content="Stopping as we exceeded the retry limit.")
+                    await final_message.send()
+                    return appended_messages
+            else:
+                retries = 0

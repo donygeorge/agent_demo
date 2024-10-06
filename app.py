@@ -19,7 +19,7 @@ from langfuse.openai import AsyncOpenAI
 client = AsyncOpenAI()
 
 gen_kwargs = {
-    "model": "gpt-4o",
+    "model": "gpt-4",
     "temperature": 0.2
 }
 

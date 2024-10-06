@@ -122,7 +122,18 @@ class Agent:
 
         if current_tool_call:
             tool_calls.append(current_tool_call)
-
+            
+        # backfill tool calls if none are returned and LLM return text that looks like a tool call
+        if len(tool_calls) == 0:
+            if "agent_name" in full_response and "message" in full_response:
+                print("DEBUG: Content that looks like a tool call: " + full_response)
+                tool_calls.append({
+                    "name": "callAgent",
+                    "arguments": full_response
+                })
+                full_response = ""
+                print("Filled in tool call from response text")
+                
         print("Tool calls: [" + self.name + "]: " + str(tool_calls)) 
         truncated_response = full_response[:100] + "..." if len(full_response) > 100 else full_response
         print("full_response: " + self.name + ":" + truncated_response)
