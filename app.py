@@ -3,6 +3,7 @@ import chainlit as cl
 import base64
 from agents.planning_agent import PlanningAgent
 from agents.implementation_agent import ImplementationAgent
+from agents.supervisor_agent import SupervisorAgent
 from prompts import PLANNING_PROMPT, SYSTEM_PROMPT
 
 load_dotenv()
@@ -27,6 +28,9 @@ planning_agent = PlanningAgent(client=client)
 implementation_agent = ImplementationAgent(client=client)
 planning_agent.register_agent(implementation_agent)
 implementation_agent.register_agent(planning_agent)
+supervisor_agent = SupervisorAgent(client=client)
+supervisor_agent.register_agent(planning_agent)
+supervisor_agent.register_agent(implementation_agent)
 
 @observe
 @cl.on_chat_start
@@ -77,9 +81,10 @@ async def on_message(message: cl.Message):
     else:
         message_history.append({"role": "user", "content": message.content})
     
-    response_message = await planning_agent.execute(message_history)
+    appended_messsages = await supervisor_agent.execute(message_history)
 
-    message_history.append({"role": "assistant", "content": response_message})
+    message_history.extend(appended_messsages)
+    # message_history.append({"role": "assistant", "content": response_message})
     cl.user_session.set("message_history", message_history)
 
 if __name__ == "__main__":

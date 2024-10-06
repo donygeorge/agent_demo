@@ -6,3 +6,7 @@ class PlanningAgent(Agent):
     def __init__(self, client, gen_kwargs=None):
         super().__init__(name="planning", client=client, prompt=PLANNING_PROMPT, gen_kwargs=gen_kwargs)
         # Add any additional initialization specific to PlanningAgent
+    
+    def execute(self, message_history):
+        print(f'executing planning agent execute')
+        return super().execute(message_history)

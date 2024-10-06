@@ -31,10 +31,10 @@ class Agent:
             }
         },
         {
-        "type": "function",
-        "function": {
+            "type": "function",
+            "function": {
             "name": "callAgent",
-            "description": "Call another agent to perform a specific task.",
+            "description": "Call another agent to perform a specific task with instructions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -42,10 +42,14 @@ class Agent:
                         "type": "string",
                         "description": "The name of the agent to call (e.g., 'implementation').",
                     },
+                    "message": {
+                        "type": "string",
+                        "description": "Instructions or message to pass to the called agent.",
+                    },
                 },
-                "required": ["agent_name"],
+                "required": ["agent_name", "message"],
                 "additionalProperties": False,
-                },
+                }
             }
         }
     ]
@@ -64,7 +68,7 @@ class Agent:
     def register_agent(self, agent):
         self.known_agents[agent.name] = agent
 
-    async def execute(self, message_history):
+    async def extract_response(self, message_history):
         """
         Executes the agent's main functionality.
 
@@ -83,8 +87,9 @@ class Agent:
         response_message = cl.Message(content="")
         await response_message.send()
 
+        print("\n\nDEBUG: Message history sent to LLM: " + pretty_print_messages(copied_message_history))
         stream = await self.client.chat.completions.create(messages=copied_message_history, stream=True, tools=self.tools, tool_choice="auto", **self.gen_kwargs)
-                
+
         full_response = ""
         tool_calls = []
         current_tool_call_index = None
@@ -118,18 +123,26 @@ class Agent:
         if current_tool_call:
             tool_calls.append(current_tool_call)
 
-        print("Tool calls: " + str(tool_calls))      
+        print("Tool calls: [" + self.name + "]: " + str(tool_calls)) 
+        truncated_response = full_response[:100] + "..." if len(full_response) > 100 else full_response
+        print("full_response: " + self.name + ":" + truncated_response)
+        print("\n\n==================================================\n\n")
 
+        return full_response, tool_calls
+        
+    async def handle_update_artifact(self, tool_calls):
+        appended_messages = []
         for tool_call in tool_calls:
             function_name = tool_call["name"]
             arguments = tool_call["arguments"]
 
-            print(f"DEBUG: function_name: {function_name}")
-            print(f"DEBUG: arguments: {arguments}")        
+            # print(f"DEBUG: function_name: {function_name}")
+            # print(f"DEBUG: arguments: {arguments}")        
             
             if function_name == "updateArtifact":              
                 arguments_dict = json.loads(arguments)
                 filename = arguments_dict.get("filename")
+                print(f"DEBUG: updating filename: {filename}")
                 contents = arguments_dict.get("contents")
                 
                 if filename and contents:
@@ -137,32 +150,41 @@ class Agent:
                     with open(os.path.join("artifacts", filename), "w") as file:
                         file.write(contents)
                     
-                    # Add a message to the message history
-                    message_history.append({
+                    # # Add a message to the message history
+                    system_message = {
                         "role": "system",
                         "content": f"The artifact '{filename}' was updated."
-                    })
+                    }
+                    appended_messages.append(system_message)
+                    # message_history.append(system_message)
+                    
+                    # Inform the user about the file update
+                    print(f"DEBUG: updating message: The file '{filename}' has been updated.")
+                    update_message = cl.Message(content=f"The file '{filename}' has been updated.")
+                    await update_message.send()
 
-                    stream = await self.client.chat.completions.create(messages=message_history, stream=True, **self.gen_kwargs)
-                    async for part in stream:
-                        if token := part.choices[0].delta.content or "":
-                            await response_message.stream_token(token)  
-            elif function_name == "callAgent":
-                arguments_dict = json.loads(arguments)
-                agent_name = arguments_dict.get("agent_name")
-                if agent_name:
-                    if agent_name in self.known_agents:
-                        print(f"DEBUG: calling {agent_name} agent")
-                        return await self.known_agents[agent_name].execute(message_history)
-                    else:
-                        print(f"DEBUG: {agent_name} agent not found")
+                    # stream = await self.client.chat.completions.create(messages=message_history, stream=True, **self.gen_kwargs)
+                    # async for part in stream:
+                    #     if token := part.choices[0].delta.content or "":
+                    #         await response_message.stream_token(token)  
+        
+        return appended_messages
 
-        else:
-            print("No tool call")
-
-        await response_message.update()
-        return response_message.content
-
+    async def execute(self, message_history):
+        print("executing base agent execute")
+        full_response, tool_calls = await self.extract_response(message_history)
+        appended_messages = []
+        
+        text_response = {"role": "assistant", "content": f'[from \'{self.name} agent\'] : {full_response}'}
+        appended_messages.append(text_response)
+        
+        update_artifact_appended_messages = await self.handle_update_artifact(tool_calls)
+        appended_messages.extend(update_artifact_appended_messages)
+        
+        print(f"\n\nDEBUG: appended_messages in base agent:\n {pretty_print_messages(appended_messages)}\n\n")
+        print(f"\n\nDEBUG: full_response in base agent:\n {full_response}\n\n")
+        
+        return appended_messages
 
     def _build_system_prompt(self):
         """
@@ -182,3 +204,25 @@ class Agent:
         artifacts_content += "</ARTIFACTS>"
 
         return f"{self.prompt}\n{artifacts_content}"
+    
+def pretty_print_messages(messages, max_chars=150):
+    pretty_messages = []
+    for msg in messages:
+        role = msg.get('role', 'unknown')
+        content = msg.get('content', '')
+        
+        if isinstance(content, list):
+            # If content is a list, join its elements
+            content = ' '.join(str(item) for item in content)
+        elif not isinstance(content, str):
+            # If content is neither a list nor a string, convert it to a string
+            content = str(content)
+            
+        # Replace newline characters with spaces
+        content = content.replace('\n', ' ')
+        
+        truncated_content = content[:max_chars] + ('...' if len(content) > max_chars else '')
+        pretty_messages.append(f"{role}: {truncated_content}")
+    return "\n".join(pretty_messages)
+
+    
